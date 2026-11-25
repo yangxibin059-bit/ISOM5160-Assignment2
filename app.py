@@ -27,16 +27,17 @@ SECRET PHRASE (must appear on the app page): ISOM5160-HW2-SMS
 # =============================================================================
 # STUDENT ANSWERS BLOCK (fill in; keep this in the SAME .py file)
 # =============================================================================
-# Student ID: YOUR_STUDENT_ID
+# Student ID: 21329863
 #
 # GenAI acknowledgment (required if you used GenAI; otherwise write "None"):
-#   - Tools used: YOUR_ANSWER
-#   - How you used them: YOUR_ANSWER
+#   - Tools used: OpenAI Codex (ChatGPT).
+#   - How you used them: Completed the starter functions, drafted the business
+#     answers, and debugged and tested the app with the required model/dataset.
 #
 # Q1. Who is the primary business user of this app?
 #     (one short sentence; e.g., an employee or a security analyst reviewing
 #      inbound SMS for spam or scam-like messages)
-#   YOUR_ANSWER:
+#   A security analyst reviews inbound business SMS messages for spam or scams.
 #
 # Q2. Look at the accuracy from your 100-sample test. Is accuracy enough
 #     for a business to rely on this app, and why or why not?
@@ -44,11 +45,16 @@ SECRET PHRASE (must appear on the app page): ISOM5160-HW2-SMS
 #     YOUR app run. Comment on the cost of a false positive (blocking a
 #     legitimate SMS, such as a bank or one-time code message) versus a
 #     false negative (missing a spam or scam-like message).
-#   YOUR_ANSWER:
+#   My app achieved 99.00% accuracy (99/100) on the fixed 100-sample test.
+#   This small, fixed sample is insufficient evidence for business reliance,
+#   so the app should support human review.
+#   A false positive could block a bank alert or one-time code, while a false
+#   negative could expose the user to a scam and financial loss.
 #
 # =============================================================================
 
 import streamlit as st
+from streamlit.errors import StreamlitSecretNotFoundError
 from datasets import load_dataset
 from transformers import pipeline
 
@@ -59,7 +65,7 @@ N_TEST = 100
 SPLIT_SEED = 42
 
 # Course identity (required)
-STUDENT_ID = "YOUR_STUDENT_ID"  # STUDENT: replace with your real student ID
+STUDENT_ID = "21329863"  # STUDENT: replace with your real student ID
 COURSE_SECRET = "ISOM5160-HW2-SMS"  # do not change
 
 
@@ -109,33 +115,49 @@ def load_test_samples():
 
 def classify_text(classifier, text):
     """Return (display_label, confidence) for one SMS string."""
-    # STUDENT: call the pipeline on this one text, map the raw label with
-    # map_label(...), and return the display label and the confidence score.
-    display_label = None  # STUDENT: replace this
-    score = None  # STUDENT: replace this
+    prediction = classifier(text)[0]
+    display_label = map_label(prediction["label"])
+    score = float(prediction["score"])
     return display_label, score
 
 
 def compute_accuracy(pred_labels, true_labels):
     """Return accuracy as a float between 0 and 1."""
-    # STUDENT: accuracy = (number of matches) / (number of samples).
-    accuracy = None  # STUDENT: replace this
+    if len(pred_labels) != len(true_labels):
+        raise ValueError("Predictions and ground truth must have the same length.")
+    if not true_labels:
+        raise ValueError("At least one sample is required to compute accuracy.")
+    matches = sum(pred == true for pred, true in zip(pred_labels, true_labels))
+    accuracy = matches / len(true_labels)
     return accuracy
 
 
 def main():
+    st.set_page_config(page_title="ISOM5160 - Homework 2", layout="wide")
     st.title("ISOM5160")
     st.write("Homework 2 — SMS Spam / Smishing Alert")
-    # STUDENT: also show Student ID and COURSE_SECRET on the page.
+    st.write(f"**Student ID:** {STUDENT_ID}")
+    st.write(f"**Course secret:** {COURSE_SECRET}")
+    if STUDENT_ID == "YOUR_STUDENT_ID":
+        st.warning("Replace YOUR_STUDENT_ID in app.py with your real student ID.")
 
     # Use a Hugging Face fine-grained token from Streamlit Cloud secrets
     # if one is set. Do not put the token in this file.
-    hf_token = None
-    if "HF_TOKEN" in st.secrets:
-        hf_token = st.secrets["HF_TOKEN"]
+    try:
+        hf_token = st.secrets.get("HF_TOKEN")
+    except StreamlitSecretNotFoundError:
+        # Public downloads also work locally without a secrets.toml file.
+        hf_token = None
 
-    # STUDENT: load the model with load_model(hf_token)
-    classifier = None
+    try:
+        with st.spinner("Loading the SMS classification model..."):
+            classifier = load_model(hf_token)
+    except Exception:
+        st.error(
+            "Could not load the model. Check the internet connection, installed "
+            "dependencies, and HF_TOKEN in Streamlit secrets, then rerun the app."
+        )
+        st.stop()
 
     alert_text = st.text_area(
         "SMS message",
@@ -147,9 +169,16 @@ def main():
     )
 
     if st.button("Classify SMS"):
-        # STUDENT: if the text box is not empty, call classify_text,
-        # then show the display label and the confidence.
-        pass
+        if not alert_text.strip():
+            st.warning("Please enter an SMS message before classifying it.")
+        else:
+            try:
+                with st.spinner("Classifying the SMS..."):
+                    label, confidence = classify_text(classifier, alert_text)
+                st.write(f"**Prediction:** {label}")
+                st.write(f"**Confidence:** {confidence:.2%}")
+            except Exception:
+                st.error("Could not classify this SMS. Please try again.")
 
     st.subheader("Test on 100 Hugging Face samples")
     st.write(
@@ -157,11 +186,54 @@ def main():
         "dataset and measure accuracy."
     )
     if st.button("Run 100-sample test"):
-        # STUDENT: call load_test_samples(), classify each message with
-        # classify_text, then compute_accuracy. Show the accuracy and a
-        # results table with at least these columns:
-        # # | Text (short) | Ground truth | Prediction | Confidence | Match
-        pass
+        st.session_state.pop("test_result", None)
+        progress = st.progress(0, text="Loading the 100 test messages...")
+        try:
+            texts, true_labels = load_test_samples()
+            pred_labels = []
+            rows = []
+            for index, (text, true_label) in enumerate(zip(texts, true_labels), 1):
+                label, confidence = classify_text(classifier, text)
+                pred_labels.append(label)
+                short_text = " ".join(text.split())
+                if len(short_text) > 100:
+                    short_text = short_text[:97] + "..."
+                rows.append({
+                    "#": index,
+                    "Text (short)": short_text,
+                    "Ground truth": true_label,
+                    "Prediction": label,
+                    "Confidence": f"{confidence:.2%}",
+                    "Match": label == true_label,
+                })
+                progress.progress(index / N_TEST, text=f"Tested {index}/{N_TEST} messages")
+
+            accuracy = compute_accuracy(pred_labels, true_labels)
+            # Keep the table visible on later reruns without repeating inference.
+            st.session_state["test_result"] = {"accuracy": accuracy, "rows": rows}
+        except Exception:
+            st.error(
+                "Could not complete the 100-sample test. Check the internet "
+                "connection and Hugging Face access, then try again."
+            )
+        finally:
+            progress.empty()
+
+    if "test_result" in st.session_state:
+        result = st.session_state["test_result"]
+        st.metric("Accuracy", f"{result['accuracy']:.2%}")
+        correct = sum(row["Match"] for row in result["rows"])
+        st.write(f"Correct predictions: {correct} / {N_TEST}")
+        st.dataframe(
+            result["rows"],
+            hide_index=True,
+            width="stretch",
+            column_config={"Text (short)": st.column_config.TextColumn(width="medium")},
+        )
+        st.caption(
+            "Accuracy is measured on the fixed homework sample; it does not "
+            "establish performance on future business messages."
+        )
 
 
 if __name__ == "__main__":
